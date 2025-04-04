@@ -8,59 +8,82 @@ namespace ClearDir
 {
     class Program
     {
-        static ConsoleStatusPanel statusPanel = new ConsoleStatusPanel();
+        static ConsoleStatusPanel statusPanel = new();
+        static Dictionary<CancellationTokenType, CancellationTokenSource> cancellationTokenSources = InitializeCancellationTokenSources();
 
         static async Task Main(string[] args)
         {
-            // Ensure the panel appears on a new line.
+            EnsureNewLine();
+            InitializeStatusPanel();
+
+            if (!ValidateArgs(args)) return;
+
+            string startDirectory = NormalizePath(args[0]);
+            if (!CheckDirectoryExists(startDirectory)) return;
+
+            var searcher = new DirectorySearcher();
+            var updateQueue = new PanelUpdateQueue();
+
+            _ = StartFlushTaskAsync(updateQueue);
+            await PerformDirectorySearchAsync(searcher, startDirectory, updateQueue);
+        }
+
+        static void EnsureNewLine()
+        {
             if (Console.CursorLeft != 0)
                 Console.WriteLine();
-            
+        }
+
+        static void InitializeStatusPanel()
+        {
             statusPanel.Add(PanelLabels.Header, "ClearDir v1.0", 0, 0, 80, TextAlignment.Center);
             statusPanel.Add(PanelLabels.Scanning, "Initializing", 0, 1, 80, TextAlignment.Left);
             statusPanel.Add(PanelLabels.FoundCount, "0", 74, 2, 5, TextAlignment.Right);
             statusPanel.Add(PanelLabels.Result, "[OK]", 0, 2, 75, TextAlignment.Left);
             statusPanel.Initialize();
+        }
 
-            // Create the cancellation token sources used for the search and flush operations.
-            var cancellationTokenSource = new CancellationTokenSource();
-            var flushCts = new CancellationTokenSource();
+        static Dictionary<CancellationTokenType, CancellationTokenSource> InitializeCancellationTokenSources()
+        {
+            var result = new Dictionary<CancellationTokenType, CancellationTokenSource>();
 
-            // Set-up a handler so that when Ctrl+C is pressed, we cancel our operations gracefully.
-            Console.CancelKeyPress += (sender, e) =>
+            foreach (CancellationTokenType type in Enum.GetValues(typeof(CancellationTokenType)))
             {
-                // Prevent the process from terminating immediately.
-                e.Cancel = true;
-                cancellationTokenSource.Cancel();
-                flushCts.Cancel();
-            };
+                result[type] = new CancellationTokenSource();
+            }
 
-            // If no parameter is provided, report usage and exit.
+            return result;
+        }
+
+        static bool ValidateArgs(string[] args)
+        {
             if (args.Length == 0)
             {
                 statusPanel.Update(PanelLabels.Result, "Usage: ClearDir [start-directory]");
-                statusPanel.Detach();
-                return;
+                return false;
             }
+            return true;
+        }
 
-            // Normalize the provided directory path.
-            string startDirectory = args[0]
-                .Replace('/', Path.DirectorySeparatorChar)
-                .Replace('\\', Path.DirectorySeparatorChar);
+        static string NormalizePath(string input)
+        {
+            return input.Replace('/', Path.DirectorySeparatorChar).Replace('\\', Path.DirectorySeparatorChar);
+        }
 
+        static bool CheckDirectoryExists(string startDirectory)
+        {
             if (!Directory.Exists(startDirectory))
             {
                 statusPanel.Update(PanelLabels.Result, $"The provided directory does not exist: {startDirectory}");
-                statusPanel.Detach();
-                return;
+                return false;
             }
+            return true;
+        }
 
-            var searcher = new DirectorySearcher();
-
-            // Create an update queue that keeps only the latest update for each element.
-            var updateQueue = new PanelUpdateQueue();
-
-            // Launch a background task that flushes updates from the queue to the panel periodically.
+        static Task StartFlushTaskAsync(PanelUpdateQueue updateQueue)
+        {
+            var flushCts = cancellationTokenSources[CancellationTokenType.Flush];
+            
             var flushTask = Task.Run(async () =>
             {
                 while (!flushCts.Token.IsCancellationRequested)
@@ -77,7 +100,13 @@ namespace ClearDir
                 }
             }, flushCts.Token);
 
-            // Forward progress updates to the update queue asynchronously.
+            return flushTask;
+        }
+
+        static async Task PerformDirectorySearchAsync(DirectorySearcher searcher, string startDirectory, PanelUpdateQueue updateQueue)
+        {
+            var searchCts = cancellationTokenSources[CancellationTokenType.Search];
+
             var progress = new Progress<DirectorySearchStatus>(status =>
             {
                 updateQueue.Enqueue(PanelLabels.Scanning, status.CurrentDirectory);
@@ -86,12 +115,8 @@ namespace ClearDir
 
             try
             {
-                // Run the directory search asynchronously.
-                var results = await searcher.SearchDirectoriesAsync(startDirectory, progress, cancellationTokenSource.Token);
-
-                // Flush any pending updates.
+                var results = await searcher.SearchDirectoriesAsync(startDirectory, progress, searchCts.Token);
                 updateQueue.Flush(statusPanel);
-
                 statusPanel.Update(PanelLabels.Result, $"Search completed. Total directories found: {results.Count}");
             }
             catch (OperationCanceledException ex)
@@ -101,12 +126,14 @@ namespace ClearDir
                 statusPanel.Detach();
                 Console.WriteLine(ex.InnerException?.Message);
             }
-            finally
+        }
+
+        static void OnProcessExit(object sender, EventArgs e)
+        {
+            statusPanel.Detach();
+            foreach (var cts in cancellationTokenSources.Values)
             {
-                // Cancel the flush task and wait for it to exit.
-                flushCts.Cancel();
-                await flushTask;
-                
+                cts.Cancel(); // Ensure graceful cleanup
             }
         }
     }
