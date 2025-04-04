@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Security.AccessControl;
 
 namespace ClearDir
 {
@@ -22,27 +23,11 @@ namespace ClearDir
     /// </summary>
     public class ConsoleStatusPanel
     {
-        private readonly int baseX;
-        private readonly int baseY;
+        private readonly int baseX = 0;
+        private  int baseY;
         private readonly object _lock = new object();
         private bool isFinalized = false;
         private readonly Dictionary<PanelLabels, PanelElement> _elements = new Dictionary<PanelLabels, PanelElement>();
-
-        /// <summary>
-        /// Initializes a new instance of the <see cref="ConsoleStatusPanel"/> class.
-        /// Sets baseX to 0 and baseY to the current cursor position on the console.
-        /// </summary>
-        public ConsoleStatusPanel()
-        {
-            this.baseX = 0;
-            this.baseY = Console.CursorTop;
-        }
-
-        public ConsoleStatusPanel(int baseX, int baseY)
-        {
-            this.baseX = baseX;
-            this.baseY = baseY;
-        }
 
         /// <summary>
         /// Adds a new panel element (cell). The parameters relativeX and relativeY
@@ -55,10 +40,6 @@ namespace ClearDir
             {
                 var element = new PanelElement(label, text, relativeX, relativeY, width, alignment);
                 _elements[label] = element;
-                if (!isFinalized)
-                {
-                    Render();
-                }
             }
         }
 
@@ -88,7 +69,15 @@ namespace ClearDir
         {
             lock (_lock)
             {
-                Render();
+                if (Console.CursorLeft != 0)
+                    Console.WriteLine();
+
+                var lines = BuildPlainLines();
+                foreach (var line in lines)
+                {
+                    Console.WriteLine(line);
+                }
+                baseY = Console.CursorTop - lines.Count;
             }
         }
 

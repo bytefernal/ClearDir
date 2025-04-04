@@ -13,7 +13,6 @@ namespace ClearDir
 
         static async Task Main(string[] args)
         {
-            EnsureNewLine();
             InitializeStatusPanel();
 
             if (!ValidateArgs(args)) return;
@@ -26,12 +25,6 @@ namespace ClearDir
 
             _ = StartFlushTaskAsync(updateQueue);
             await PerformDirectorySearchAsync(searcher, startDirectory, updateQueue);
-        }
-
-        static void EnsureNewLine()
-        {
-            if (Console.CursorLeft != 0)
-                Console.WriteLine();
         }
 
         static void InitializeStatusPanel()
