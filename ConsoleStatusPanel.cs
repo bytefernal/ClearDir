@@ -28,6 +28,16 @@ namespace ClearDir
         private bool isFinalized = false;
         private readonly Dictionary<PanelLabels, PanelElement> _elements = new Dictionary<PanelLabels, PanelElement>();
 
+        /// <summary>
+        /// Initializes a new instance of the <see cref="ConsoleStatusPanel"/> class.
+        /// Sets baseX to 0 and baseY to the current cursor position on the console.
+        /// </summary>
+        public ConsoleStatusPanel()
+        {
+            this.baseX = 0;
+            this.baseY = Console.CursorTop;
+        }
+
         public ConsoleStatusPanel(int baseX, int baseY)
         {
             this.baseX = baseX;

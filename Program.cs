@@ -1,4 +1,5 @@
 ﻿using System;
+using System.ComponentModel.DataAnnotations;
 using System.IO;
 using System.Threading;
 using System.Threading.Tasks;
@@ -7,16 +8,14 @@ namespace ClearDir
 {
     class Program
     {
+        static ConsoleStatusPanel statusPanel = new ConsoleStatusPanel();
+
         static async Task Main(string[] args)
         {
             // Ensure the panel appears on a new line.
             if (Console.CursorLeft != 0)
                 Console.WriteLine();
-            int baseX = 0;
-            int baseY = Console.CursorTop;
-
-            // Create and configure the status panel.
-            var statusPanel = new ConsoleStatusPanel(baseX, baseY);
+            
             statusPanel.Add(PanelLabels.Header, "ClearDir v1.0", 0, 0, 80, TextAlignment.Center);
             statusPanel.Add(PanelLabels.Scanning, "Initializing", 0, 1, 80, TextAlignment.Left);
             statusPanel.Add(PanelLabels.FoundCount, "0", 74, 2, 5, TextAlignment.Right);
@@ -107,7 +106,7 @@ namespace ClearDir
                 // Cancel the flush task and wait for it to exit.
                 flushCts.Cancel();
                 await flushTask;
-                statusPanel.Detach();
+                
             }
         }
     }
