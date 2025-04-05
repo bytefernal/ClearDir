@@ -23,11 +23,11 @@ namespace ClearDir
     /// </summary>
     public class ConsoleStatusPanel
     {
-        private readonly int baseX = 0;
-        private  int baseY;
+        private readonly int _baseX = 0;
+        private int _baseY;
         private readonly object _lock = new object();
-        private bool isFinalized = false;
-        private readonly Dictionary<PanelLabels, PanelElement> _elements = new Dictionary<PanelLabels, PanelElement>();
+        private bool _isFinalized = false;
+        private readonly Dictionary<PanelLabels, PanelElement> _elements = new();
 
         /// <summary>
         /// Adds a new panel element (cell). The parameters relativeX and relativeY
@@ -51,8 +51,9 @@ namespace ClearDir
         {
             lock (_lock)
             {
-                if (isFinalized)
+                if (_isFinalized)
                     return;
+
                 if (_elements.ContainsKey(label))
                 {
                     _elements[label].Text = newText;
@@ -77,7 +78,7 @@ namespace ClearDir
                 {
                     Console.WriteLine(line);
                 }
-                baseY = Console.CursorTop - lines.Count;
+                _baseY = Console.CursorTop - lines.Count;
             }
         }
 
@@ -88,12 +89,12 @@ namespace ClearDir
         {
             lock (_lock)
             {
-                if (isFinalized) return;
+                if (_isFinalized) return;
 
-                isFinalized = true;
+                _isFinalized = true;
                 var lines = BuildPlainLines();
                 int linesCount = lines.Count;
-                Console.SetCursorPosition(0, baseY + linesCount);
+                Console.SetCursorPosition(0, _baseY + linesCount);
             }
         }
 
@@ -103,7 +104,7 @@ namespace ClearDir
         /// </summary>
         private List<string> BuildPlainLines()
         {
-            List<string> lines = new List<string>();
+            var lines = new List<string>();
             // Group cells by their row order.
             var rows = _elements.Values.GroupBy(e => e.RelativeY).OrderBy(g => g.Key);
             foreach (var rowGroup in rows)
@@ -123,7 +124,7 @@ namespace ClearDir
         /// </summary>
         private void Render()
         {
-            Console.SetCursorPosition(baseX, baseY);
+            Console.SetCursorPosition(_baseX, _baseY);
             var lines = BuildPlainLines();
             foreach (var line in lines)
             {
@@ -139,20 +140,15 @@ namespace ClearDir
         {
             if (text.Length > width)
                 text = text.Substring(0, width);
+
             int padding = width - text.Length;
-            switch (alignment)
+            return alignment switch
             {
-                case TextAlignment.Left:
-                    return text + new string(' ', padding);
-                case TextAlignment.Right:
-                    return new string(' ', padding) + text;
-                case TextAlignment.Center:
-                    int padLeft = padding / 2;
-                    int padRight = padding - padLeft;
-                    return new string(' ', padLeft) + text + new string(' ', padRight);
-                default:
-                    return text;
-            }
+                TextAlignment.Left => text + new string(' ', padding),
+                TextAlignment.Right => new string(' ', padding) + text,
+                TextAlignment.Center => new string(' ', padding / 2) + text + new string(' ', padding - (padding / 2)),
+                _ => text,
+            };
         }
 
         /// <summary>

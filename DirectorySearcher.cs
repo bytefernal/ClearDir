@@ -14,6 +14,17 @@ namespace ClearDir
 
     public class DirectorySearcher
     {
+        private readonly ILogger _logger;
+
+        /// <summary>
+        /// Constructor to initialize the DirectorySearcher with an ILogger instance.
+        /// </summary>
+        /// <param name="logger">The logger to handle informational and error messages.</param>
+        public DirectorySearcher(ILogger logger)
+        {
+            _logger = logger ?? throw new ArgumentNullException(nameof(logger));
+        }
+
         /// <summary>
         /// Recursively searches for directories starting from a given root.
         /// Reports progress by updating the current scanning directory and the running count.
@@ -66,12 +77,12 @@ namespace ClearDir
                     }
                     catch (Exception ex) when (!(ex is OperationCanceledException))
                     {
-                        // Log a generic message and trigger cancellation.
-                        //Console.Error.WriteLine($"An error occurred while accessing '{currentDir}'. Cancelling search.");
-                        throw new OperationCanceledException("Search cancelled due to an error.", ex);
+                        // Log error using ILogger and gracefully cancel the search
+                        _logger.LogError($"An error occurred while accessing '{currentDir}'. Search is being canceled.", ex);
+                        throw new OperationCanceledException($"Search canceled due to an error in '{currentDir}'.", ex, cancellationToken);
                     }
                 }
-                
+
                 Search(root);
                 return foundDirectories;
             }, cancellationToken);

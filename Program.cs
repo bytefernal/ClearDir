@@ -8,8 +8,9 @@ namespace ClearDir
 {
     class Program
     {
-        static ConsoleStatusPanel statusPanel = new();
-        static Dictionary<CancellationTokenType, CancellationTokenSource> cancellationTokenSources = InitializeCancellationTokenSources();
+        private static readonly ConsoleStatusPanel _statusPanel = new();
+        private static readonly ILogger _logger = new StatusPanelLogger(_statusPanel);
+        private static readonly Dictionary<CancellationTokenType, CancellationTokenSource> _cancellationTokenSources = InitializeCancellationTokenSources();
 
         static async Task Main(string[] args)
         {
@@ -20,23 +21,29 @@ namespace ClearDir
             string startDirectory = NormalizePath(args[0]);
             if (!CheckDirectoryExists(startDirectory)) return;
 
-            var searcher = new DirectorySearcher();
+            var searcher = new DirectorySearcher(_logger);
             var updateQueue = new PanelUpdateQueue();
 
             _ = StartFlushTaskAsync(updateQueue);
             await PerformDirectorySearchAsync(searcher, startDirectory, updateQueue);
         }
 
-        static void InitializeStatusPanel()
+        /// <summary>
+        /// Initializes the status panel with predefined labels and dimensions.
+        /// </summary>
+        private static void InitializeStatusPanel()
         {
-            statusPanel.Add(PanelLabels.Header, "ClearDir v1.0", 0, 0, 80, TextAlignment.Center);
-            statusPanel.Add(PanelLabels.Scanning, "Initializing", 0, 1, 80, TextAlignment.Left);
-            statusPanel.Add(PanelLabels.FoundCount, "0", 74, 2, 5, TextAlignment.Right);
-            statusPanel.Add(PanelLabels.Result, "[OK]", 0, 2, 75, TextAlignment.Left);
-            statusPanel.Initialize();
+            _statusPanel.Add(PanelLabels.Header, "ClearDir v1.0", 0, 0, 80, TextAlignment.Center);
+            _statusPanel.Add(PanelLabels.Scanning, "", 0, 1, 80, TextAlignment.Left);
+            _statusPanel.Add(PanelLabels.FoundCount, "", 74, 2, 5, TextAlignment.Right);
+            _statusPanel.Add(PanelLabels.Result, "Initializing", 0, 2, 75, TextAlignment.Left);
+            _statusPanel.Initialize();
         }
 
-        static Dictionary<CancellationTokenType, CancellationTokenSource> InitializeCancellationTokenSources()
+        /// <summary>
+        /// Creates and initializes cancellation token sources based on the defined enum values.
+        /// </summary>
+        private static Dictionary<CancellationTokenType, CancellationTokenSource> InitializeCancellationTokenSources()
         {
             var result = new Dictionary<CancellationTokenType, CancellationTokenSource>();
 
@@ -48,86 +55,96 @@ namespace ClearDir
             return result;
         }
 
-        static bool ValidateArgs(string[] args)
+        /// <summary>
+        /// Validates the program arguments and ensures proper usage is displayed if arguments are missing.
+        /// </summary>
+        private static bool ValidateArgs(string[] args)
         {
             if (args.Length == 0)
             {
-                statusPanel.Update(PanelLabels.Result, "Usage: ClearDir [start-directory]");
+                _statusPanel.Update(PanelLabels.Result, "Usage: ClearDir [start-directory]");
                 return false;
             }
             return true;
         }
 
-        static string NormalizePath(string input)
+        /// <summary>
+        /// Normalizes the input directory path to use the proper directory separator characters.
+        /// </summary>
+        private static string NormalizePath(string input)
         {
             return input.Replace('/', Path.DirectorySeparatorChar).Replace('\\', Path.DirectorySeparatorChar);
         }
 
-        static bool CheckDirectoryExists(string startDirectory)
+        /// <summary>
+        /// Checks whether the specified directory exists, updating the panel if not.
+        /// </summary>
+        private static bool CheckDirectoryExists(string startDirectory)
         {
             if (!Directory.Exists(startDirectory))
             {
-                statusPanel.Update(PanelLabels.Result, $"The provided directory does not exist: {startDirectory}");
+                _statusPanel.Update(PanelLabels.Result, $"The provided directory does not exist: {startDirectory}");
                 return false;
             }
             return true;
         }
 
-        static Task StartFlushTaskAsync(PanelUpdateQueue updateQueue)
+        /// <summary>
+        /// Starts a flush task asynchronously, using a periodic task runner for updates.
+        /// </summary>
+        private static Task StartFlushTaskAsync(PanelUpdateQueue updateQueue)
         {
-            var flushCts = cancellationTokenSources[CancellationTokenType.Flush];
-            
-            var flushTask = Task.Run(async () =>
-            {
-                while (!flushCts.Token.IsCancellationRequested)
-                {
-                    updateQueue.Flush(statusPanel);
-                    try
-                    {
-                        await Task.Delay(100, flushCts.Token);
-                    }
-                    catch (TaskCanceledException)
-                    {
-                        break;
-                    }
-                }
-            }, flushCts.Token);
+            var flushCts = _cancellationTokenSources[CancellationTokenType.Flush];
 
-            return flushTask;
+            Func<Task> flushTask = async () =>
+            {
+                updateQueue.Flush(_statusPanel);
+                await Task.CompletedTask; // Simulate async work if needed
+            };
+
+            var periodicTaskRunner = new PeriodicTaskRunner(flushTask, 100, _logger);
+            return periodicTaskRunner.StartAsync(flushCts.Token);
         }
 
-        static async Task PerformDirectorySearchAsync(DirectorySearcher searcher, string startDirectory, PanelUpdateQueue updateQueue)
+        /// <summary>
+        /// Performs the directory search asynchronously, updating the panel with progress.
+        /// </summary>
+        private static async Task PerformDirectorySearchAsync(DirectorySearcher searcher, string startDirectory, PanelUpdateQueue updateQueue)
         {
-            var searchCts = cancellationTokenSources[CancellationTokenType.Search];
+            var searchCts = _cancellationTokenSources[CancellationTokenType.Search];
 
             var progress = new Progress<DirectorySearchStatus>(status =>
             {
                 updateQueue.Enqueue(PanelLabels.Scanning, status.CurrentDirectory);
                 updateQueue.Enqueue(PanelLabels.FoundCount, status.DirectoryCount.ToString());
+                updateQueue.Enqueue(PanelLabels.Result, "Searching");
             });
 
             try
             {
                 var results = await searcher.SearchDirectoriesAsync(startDirectory, progress, searchCts.Token);
-                updateQueue.Flush(statusPanel);
-                statusPanel.Update(PanelLabels.Result, $"Search completed. Total directories found: {results.Count}");
+                updateQueue.Flush(_statusPanel);
+                _statusPanel.Update(PanelLabels.Result, $"Search completed.");
             }
             catch (OperationCanceledException ex)
             {
-                updateQueue.Flush(statusPanel);
-                statusPanel.Update(PanelLabels.Result, "Error");
-                statusPanel.Detach();
+                updateQueue.Flush(_statusPanel);
+                _statusPanel.Update(PanelLabels.Result, "Error");
+                _statusPanel.Detach();
                 Console.WriteLine(ex.InnerException?.Message);
             }
         }
 
-        static void OnProcessExit(object sender, EventArgs e)
+        /// <summary>
+        /// Cleans up resources and cancels ongoing operations when the application exits.
+        /// </summary>
+        private static void OnProcessExit(object sender, EventArgs e)
         {
-            statusPanel.Detach();
-            foreach (var cts in cancellationTokenSources.Values)
+            foreach (var cts in _cancellationTokenSources.Values)
             {
                 cts.Cancel(); // Ensure graceful cleanup
             }
+            _statusPanel.Detach();
         }
     }
 }
