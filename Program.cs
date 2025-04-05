@@ -1,43 +1,25 @@
-﻿using System;
-using System.ComponentModel.DataAnnotations;
-using System.IO;
-using System.Threading;
-using System.Threading.Tasks;
-
-namespace ClearDir
+﻿namespace ClearDir
 {
     class Program
     {
-        private static readonly ConsoleStatusPanel _statusPanel = new();
-        private static readonly ILogger _logger = new StatusPanelLogger(_statusPanel);
+        private static readonly StatusPanelManager _statusPanelManager = new(new ConsoleStatusPanel());
+        private static readonly ILogger _logger = new StatusPanelLogger(_statusPanelManager);
+        private static readonly ApplicationManager _appManager = new ApplicationManager(_logger);
         private static readonly Dictionary<CancellationTokenType, CancellationTokenSource> _cancellationTokenSources = InitializeCancellationTokenSources();
 
         static async Task Main(string[] args)
         {
-            InitializeStatusPanel();
+            _statusPanelManager.Initialize();
 
             if (!ValidateArgs(args)) return;
 
-            string startDirectory = NormalizePath(args[0]);
+            string startDirectory = args[0];
             if (!CheckDirectoryExists(startDirectory)) return;
 
-            var searcher = new DirectorySearcher(_logger);
-            var updateQueue = new PanelUpdateQueue();
+            var searcher = new DirectorySearcher(_appManager);
 
-            _ = StartFlushTaskAsync(updateQueue);
-            await PerformDirectorySearchAsync(searcher, startDirectory, updateQueue);
-        }
-
-        /// <summary>
-        /// Initializes the status panel with predefined labels and dimensions.
-        /// </summary>
-        private static void InitializeStatusPanel()
-        {
-            _statusPanel.Add(PanelLabels.Header, "ClearDir v1.0", 0, 0, 80, TextAlignment.Center);
-            _statusPanel.Add(PanelLabels.Scanning, "", 0, 1, 80, TextAlignment.Left);
-            _statusPanel.Add(PanelLabels.FoundCount, "", 74, 2, 5, TextAlignment.Right);
-            _statusPanel.Add(PanelLabels.Result, "Initializing", 0, 2, 75, TextAlignment.Left);
-            _statusPanel.Initialize();
+            _ = StartFlushTaskAsync(_statusPanelManager);
+            await PerformDirectorySearchAsync(searcher, startDirectory, _statusPanelManager);
         }
 
         /// <summary>
@@ -62,18 +44,11 @@ namespace ClearDir
         {
             if (args.Length == 0)
             {
-                _statusPanel.Update(PanelLabels.Result, "Usage: ClearDir [start-directory]");
+                _statusPanelManager.EnqueueUpdate(PanelLabels.Result, "Usage: ClearDir [start-directory]");
+                _statusPanelManager.Flush();
                 return false;
             }
             return true;
-        }
-
-        /// <summary>
-        /// Normalizes the input directory path to use the proper directory separator characters.
-        /// </summary>
-        private static string NormalizePath(string input)
-        {
-            return input.Replace('/', Path.DirectorySeparatorChar).Replace('\\', Path.DirectorySeparatorChar);
         }
 
         /// <summary>
@@ -83,7 +58,8 @@ namespace ClearDir
         {
             if (!Directory.Exists(startDirectory))
             {
-                _statusPanel.Update(PanelLabels.Result, $"The provided directory does not exist: {startDirectory}");
+                _statusPanelManager.EnqueueUpdate(PanelLabels.Result, $"The provided directory does not exist: {startDirectory}");
+                _statusPanelManager.Flush();
                 return false;
             }
             return true;
@@ -92,13 +68,13 @@ namespace ClearDir
         /// <summary>
         /// Starts a flush task asynchronously, using a periodic task runner for updates.
         /// </summary>
-        private static Task StartFlushTaskAsync(PanelUpdateQueue updateQueue)
+        private static Task StartFlushTaskAsync(StatusPanelManager statusPanelManager)
         {
             var flushCts = _cancellationTokenSources[CancellationTokenType.Flush];
 
             Func<Task> flushTask = async () =>
             {
-                updateQueue.Flush(_statusPanel);
+                statusPanelManager.Flush();
                 await Task.CompletedTask; // Simulate async work if needed
             };
 
@@ -109,30 +85,20 @@ namespace ClearDir
         /// <summary>
         /// Performs the directory search asynchronously, updating the panel with progress.
         /// </summary>
-        private static async Task PerformDirectorySearchAsync(DirectorySearcher searcher, string startDirectory, PanelUpdateQueue updateQueue)
+        private static async Task PerformDirectorySearchAsync(DirectorySearcher searcher, string startDirectory, StatusPanelManager statusPanelManager)
         {
             var searchCts = _cancellationTokenSources[CancellationTokenType.Search];
 
             var progress = new Progress<DirectorySearchStatus>(status =>
             {
-                updateQueue.Enqueue(PanelLabels.Scanning, status.CurrentDirectory);
-                updateQueue.Enqueue(PanelLabels.FoundCount, status.DirectoryCount.ToString());
-                updateQueue.Enqueue(PanelLabels.Result, "Searching");
+                statusPanelManager.EnqueueUpdate(PanelLabels.Scanning, status.CurrentDirectory);
+                statusPanelManager.EnqueueUpdate(PanelLabels.FoundCount, status.DirectoryCount.ToString());
+                statusPanelManager.EnqueueUpdate(PanelLabels.Result, "Searching");
             });
 
-            try
-            {
-                var results = await searcher.SearchDirectoriesAsync(startDirectory, progress, searchCts.Token);
-                updateQueue.Flush(_statusPanel);
-                _statusPanel.Update(PanelLabels.Result, $"Search completed.");
-            }
-            catch (OperationCanceledException ex)
-            {
-                updateQueue.Flush(_statusPanel);
-                _statusPanel.Update(PanelLabels.Result, "Error");
-                _statusPanel.Detach();
-                Console.WriteLine(ex.InnerException?.Message);
-            }
+            var results = await searcher.SearchDirectoriesAsync(startDirectory, progress, searchCts.Token);
+            statusPanelManager.EnqueueUpdate(PanelLabels.Result, "Done");
+            statusPanelManager.Flush();
         }
 
         /// <summary>
@@ -144,7 +110,7 @@ namespace ClearDir
             {
                 cts.Cancel(); // Ensure graceful cleanup
             }
-            _statusPanel.Detach();
+            _statusPanelManager.Detach();
         }
     }
 }
