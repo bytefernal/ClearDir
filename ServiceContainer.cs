@@ -10,8 +10,19 @@ namespace ClearDir
     /// </summary>
     public enum InstanceType
     {
+        /// <summary>
+        /// A single shared instance will be used for the lifetime of the application.
+        /// </summary>
         Singleton,
+
+        /// <summary>
+        /// A new instance will be created each time the service is resolved.
+        /// </summary>
         Transient,
+ 
+        /// <summary>
+        /// A single instance will be created per scope.
+        /// </summary>
         Scoped
     }
 
@@ -26,16 +37,11 @@ namespace ClearDir
         private bool _isInScope = false;
 
         /// <summary>
-        /// Registers a service type with its factory method and lifecycle.
+        /// Registers a service with a factory method and lifecycle.
         /// </summary>
         public void Register<TService>(Func<TService> factory, InstanceType instanceType = InstanceType.Singleton) where TService : class
         {
-            _registrations[typeof(TService)] = factory;
-
-            if (instanceType == InstanceType.Singleton)
-            {
-                _singletons[typeof(TService)] = factory();
-            }
+            RegisterInternal(typeof(TService), () => factory(), instanceType);
         }
 
         /// <summary>
@@ -43,30 +49,7 @@ namespace ClearDir
         /// </summary>
         public void Register<TService>(InstanceType instanceType = InstanceType.Singleton) where TService : class
         {
-            var serviceType = typeof(TService);
-            EnsureValidType(serviceType);
-
-            _registrations[serviceType] = () =>
-            {
-                var constructor = GetConstructor(serviceType);
-                var parameters = constructor.GetParameters()
-                                            .Select(param => Resolve(param.ParameterType))
-                                            .ToArray();
-
-                var instance = Activator.CreateInstance(serviceType, parameters);
-
-                if (instance == null)
-                {
-                    throw new InvalidOperationException($"Failed to create an instance of {serviceType.FullName}.");
-                }
-
-                return instance;
-            };
-
-            if (instanceType == InstanceType.Singleton)
-            {
-                _singletons[serviceType] = _registrations[serviceType]();
-            }
+            RegisterInternal(typeof(TService), () => CreateInstance(typeof(TService)), instanceType);
         }
 
         /// <summary>
@@ -76,7 +59,7 @@ namespace ClearDir
             where TService : class
             where TImplementation : class, TService
         {
-            Register<TService>(() => (TService)Resolve<TImplementation>(), instanceType);
+            RegisterInternal(typeof(TService), () => CreateInstance(typeof(TImplementation)), instanceType);
         }
 
         /// <summary>
@@ -105,7 +88,6 @@ namespace ClearDir
             if (_registrations.TryGetValue(serviceType, out var factory))
             {
                 var instance = factory();
-
                 if (_isInScope)
                 {
                     _scopedInstances[serviceType] = instance;
@@ -124,7 +106,7 @@ namespace ClearDir
         {
             if (_isInScope)
             {
-                throw new InvalidOperationException("A scope is already active. You must call EndScope before starting a new one.");
+                throw new InvalidOperationException("A scope is already active. Call EndScope before starting a new one.");
             }
 
             _isInScope = true;
@@ -145,6 +127,41 @@ namespace ClearDir
         }
 
         /// <summary>
+        /// Internal method to handle registration logic.
+        /// </summary>
+        private void RegisterInternal(Type serviceType, Func<object> factory, InstanceType instanceType)
+        {
+            _registrations[serviceType] = factory;
+
+            if (instanceType == InstanceType.Singleton)
+            {
+                _singletons[serviceType] = factory();
+            }
+        }
+
+        /// <summary>
+        /// Creates an instance of the specified type by resolving constructor dependencies.
+        /// </summary>
+        private object CreateInstance(Type serviceType)
+        {
+            EnsureValidType(serviceType);
+
+            var constructor = GetConstructor(serviceType);
+            var parameters = constructor.GetParameters()
+                                        .Select(param => Resolve(param.ParameterType))
+                                        .ToArray();
+
+            var instance = Activator.CreateInstance(serviceType, parameters);
+
+            if (instance == null)
+            {
+                throw new InvalidOperationException($"Failed to create an instance of {serviceType.FullName}. Ensure all dependencies are registered.");
+            }
+
+            return instance;
+        }
+
+        /// <summary>
         /// Ensures the provided type is valid for automatic registration.
         /// </summary>
         private void EnsureValidType(Type serviceType)
@@ -156,18 +173,18 @@ namespace ClearDir
         }
 
         /// <summary>
-        /// Gets the constructor for automatic injection, ensuring exactly one constructor exists.
+        /// Selects the most suitable constructor for the given type.
         /// </summary>
         private ConstructorInfo GetConstructor(Type serviceType)
         {
             var constructors = serviceType.GetConstructors(BindingFlags.Public | BindingFlags.Instance);
-
-            if (constructors.Length != 1)
+            if (!constructors.Any())
             {
-                throw new InvalidOperationException($"Service type {serviceType.FullName} must have exactly one public constructor.");
+                throw new InvalidOperationException($"Type {serviceType.FullName} must have at least one public constructor.");
             }
 
-            return constructors[0];
+            // Select the constructor with the most resolvable parameters
+            return constructors.OrderByDescending(c => c.GetParameters().Length).First();
         }
     }
 }
