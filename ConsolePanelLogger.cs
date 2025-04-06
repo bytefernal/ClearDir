@@ -33,7 +33,7 @@ namespace ClearDir
         /// <param name="exception">Optional exception details to include in the log.</param>
         public void LogError(string message, Exception? exception = null)
         {
-            Console.WriteLine($"ERROR (ConsolePanel): {message}");
+            Console.WriteLine($"{message}");
             if (exception != null)
             {
                 Console.WriteLine($"Exception Details: {exception}");
