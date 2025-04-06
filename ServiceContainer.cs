@@ -1,5 +1,7 @@
 using System;
 using System.Collections.Generic;
+using System.Linq;
+using System.Reflection;
 
 namespace ClearDir
 {
@@ -48,34 +50,70 @@ namespace ClearDir
         }
 
         /// <summary>
+        /// Registers a service type for automatic constructor injection.
+        /// </summary>
+        public void Register<TService>(InstanceType instanceType = InstanceType.Singleton) where TService : class
+        {
+            var serviceType = typeof(TService);
+            var constructor = serviceType.GetConstructors(BindingFlags.Public | BindingFlags.Instance)
+                                         .SingleOrDefault(); // Ensure there is only one constructor
+
+            if (constructor == null)
+            {
+                throw new InvalidOperationException($"Service of type {serviceType} must have exactly one public constructor.");
+            }
+
+            _registrations[serviceType] = () =>
+            {
+                var parameters = constructor.GetParameters()
+                                            .Select(param => Resolve(param.ParameterType))
+                                            .ToArray();
+
+                return Activator.CreateInstance(serviceType, parameters);
+            };
+
+            if (instanceType == InstanceType.Singleton)
+            {
+                _singletons[serviceType] = _registrations[serviceType]();
+            }
+        }
+
+        /// <summary>
         /// Resolves an instance of the specified service type.
         /// </summary>
         public TService Resolve<TService>() where TService : class
         {
-            if (_singletons.TryGetValue(typeof(TService), out var singleton))
+            return (TService)Resolve(typeof(TService));
+        }
+
+        /// <summary>
+        /// Resolves an instance of the specified service type.
+        /// </summary>
+        public object Resolve(Type serviceType)
+        {
+            if (_singletons.TryGetValue(serviceType, out var singleton))
             {
-                return (TService)singleton;
+                return singleton;
             }
 
-            if (_isInScope && _scopedInstances.TryGetValue(typeof(TService), out var scoped))
+            if (_isInScope && _scopedInstances.TryGetValue(serviceType, out var scoped))
             {
-                return (TService)scoped;
+                return scoped;
             }
 
-            if (_registrations.TryGetValue(typeof(TService), out var factory))
+            if (_registrations.TryGetValue(serviceType, out var factory))
             {
                 var instance = factory();
 
-                // Store the instance in scoped dictionary if in scope
                 if (_isInScope)
                 {
-                    _scopedInstances[typeof(TService)] = instance;
+                    _scopedInstances[serviceType] = instance;
                 }
 
-                return (TService)instance;
+                return instance;
             }
 
-            throw new InvalidOperationException($"Service of type {typeof(TService)} is not registered.");
+            throw new InvalidOperationException($"Service of type {serviceType} is not registered.");
         }
 
         /// <summary>
