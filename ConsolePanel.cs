@@ -17,16 +17,14 @@ namespace ClearDir
     /// Cells are formatted with fixed widths and a specified text alignment.
     /// Rows are rendered as plain text lines (without extra borders) and are updated
     /// in place until the panel is finalized.
-    /// 
-    /// Once asynchronous operations are completed, Detach() finalizes the panel
-    /// and moves the cursor to the first unused line.
     /// </summary>
-    public class ConsoleStatusPanel
+    public class ConsolePanel
     {
         private readonly int _baseX = 0;
         private int _baseY;
         private readonly object _lock = new object();
         private bool _isFinalized = false;
+        private bool _isInitialized = false;
         private readonly Dictionary<PanelLabels, PanelElement> _elements = new();
 
         /// <summary>
@@ -63,6 +61,29 @@ namespace ClearDir
         }
 
         /// <summary>
+        /// Updates the text of an existing panel element and re-renders the panel.
+        /// If the panel has been finalized, further updates are skipped.
+        /// </summary>
+        public void Update(Dictionary<PanelLabels, string> updatesToApply)
+        {
+            lock (_lock)
+            {
+                if (_isFinalized)
+                    return;
+
+                foreach (var label in updatesToApply.Keys)
+                {
+                    if (_elements.ContainsKey(label))
+                    {
+                        _elements[label].Text = updatesToApply[label];
+                    }
+                }
+
+                Render();
+            }
+        }
+
+        /// <summary>
         /// Reserves space and renders the panel at the specified base coordinates.
         /// Call this after adding your elements.
         /// </summary>
@@ -73,28 +94,8 @@ namespace ClearDir
                 if (Console.CursorLeft != 0)
                     Console.WriteLine();
 
-                var lines = BuildPlainLines();
-                foreach (var line in lines)
-                {
-                    Console.WriteLine(line);
-                }
-                _baseY = Console.CursorTop - lines.Count;
-            }
-        }
-
-        /// <summary>
-        /// Finalizes the panel—preventing further updates—and moves the cursor to the line immediately below it.
-        /// </summary>
-        public void Detach()
-        {
-            lock (_lock)
-            {
-                if (_isFinalized) return;
-
-                _isFinalized = true;
-                var lines = BuildPlainLines();
-                int linesCount = lines.Count;
-                Console.SetCursorPosition(0, _baseY + linesCount);
+                _baseY = Console.CursorTop;
+                _isInitialized = true;
             }
         }
 
@@ -113,7 +114,7 @@ namespace ClearDir
                 var rowCells = rowGroup.OrderBy(e => e.RelativeX);
                 // Format each cell and join them with a space.
                 string line = string.Join(" ", rowCells.Select(cell => FormatCell(cell.Text, cell.Width, cell.Alignment)));
-                lines.Add(line);
+                lines.Add(DateTime.Now + ": " + line);
             }
             return lines;
         }
@@ -124,6 +125,8 @@ namespace ClearDir
         /// </summary>
         private void Render()
         {
+            if (!_isInitialized) throw new InvalidOperationException("Trying to render not initialized view.");
+
             Console.SetCursorPosition(_baseX, _baseY);
             var lines = BuildPlainLines();
             foreach (var line in lines)

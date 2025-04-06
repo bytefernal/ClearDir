@@ -2,115 +2,153 @@
 {
     class Program
     {
-        private static readonly StatusPanelManager _statusPanelManager = new(new ConsoleStatusPanel());
-        private static readonly ILogger _logger = new StatusPanelLogger(_statusPanelManager);
-        private static readonly ApplicationManager _appManager = new ApplicationManager(_logger);
-        private static readonly Dictionary<CancellationTokenType, CancellationTokenSource> _cancellationTokenSources = InitializeCancellationTokenSources();
+        private static ServiceContainer _serviceContainer = new();
 
         static async Task Main(string[] args)
         {
-            _statusPanelManager.Initialize();
+            ConfigureServices();
 
-            if (!ValidateArgs(args)) return;
+            var cancellationTokenSources = _serviceContainer.Resolve<Dictionary<CancellationTokenType, CancellationTokenSource>>();
+            var consolePanelService = _serviceContainer.Resolve<ConsolePanelService>();
+            var periodicFlushManager = _serviceContainer.Resolve<RenderLoop>();
+
+            if (!ValidateArgs(args, consolePanelService)) return;
 
             string startDirectory = args[0];
-            if (!CheckDirectoryExists(startDirectory)) return;
+            if (!CheckDirectoryExists(startDirectory, consolePanelService)) return;
 
-            var searcher = new DirectorySearcher(_appManager);
-
-            _ = StartFlushTaskAsync(_statusPanelManager);
-            await PerformDirectorySearchAsync(searcher, startDirectory, _statusPanelManager);
+            var _ = periodicFlushManager.StartAsync(cancellationTokenSources[CancellationTokenType.Flush].Token);
+            var searcher = _serviceContainer.Resolve<DirectorySearcher>();
+            await PerformDirectorySearchAsync(searcher, startDirectory, consolePanelService, cancellationTokenSources[CancellationTokenType.Search].Token);
         }
 
         /// <summary>
-        /// Creates and initializes cancellation token sources based on the defined enum values.
+        /// Configures and registers services in the DI container.
         /// </summary>
-        private static Dictionary<CancellationTokenType, CancellationTokenSource> InitializeCancellationTokenSources()
+        private static void ConfigureServices()
         {
-            var result = new Dictionary<CancellationTokenType, CancellationTokenSource>();
-
-            foreach (CancellationTokenType type in Enum.GetValues(typeof(CancellationTokenType)))
+            _serviceContainer.Register(() =>
             {
-                result[type] = new CancellationTokenSource();
-            }
+                var consolePanel = new ConsolePanel();
+                consolePanel.Add(PanelLabels.Header, "ClearDir v1.0", 0, 0, 80, TextAlignment.Center);
+                consolePanel.Add(PanelLabels.Scanning, "", 0, 1, 80, TextAlignment.Left);
+                consolePanel.Add(PanelLabels.FoundCount, "", 74, 2, 5, TextAlignment.Right);
+                consolePanel.Add(PanelLabels.Result, "Initializing", 0, 2, 75, TextAlignment.Left);
+                consolePanel.Initialize();
 
-            return result;
+                return new ConsolePanelService(consolePanel);
+            });
+
+            _serviceContainer.Register(() =>
+            {
+                var cancellationTokenSources = new Dictionary<CancellationTokenType, CancellationTokenSource>();
+                foreach (CancellationTokenType type in Enum.GetValues(typeof(CancellationTokenType)))
+                {
+                    cancellationTokenSources[type] = new CancellationTokenSource();
+                }
+                return cancellationTokenSources;
+            });
+
+            _serviceContainer.Register(() =>
+            {
+                var logger = _serviceContainer.Resolve<ILogger>();
+                var cancellationTokenSources = _serviceContainer.Resolve<Dictionary<CancellationTokenType, CancellationTokenSource>>();
+                return new ApplicationManager(logger, cancellationTokenSources);
+            });
+
+            _serviceContainer.Register(() =>
+            {
+                var appManager = _serviceContainer.Resolve<ApplicationManager>();
+                
+                return new DirectorySearcher(appManager);
+            });
+
+            _serviceContainer.Register(() =>
+            {
+                var consolePanelService = _serviceContainer.Resolve<ConsolePanelService>();
+                var logger = _serviceContainer.Resolve<ILogger>();
+                return new RenderLoop(consolePanelService, logger, 100);
+            });
         }
 
-        /// <summary>
-        /// Validates the program arguments and ensures proper usage is displayed if arguments are missing.
-        /// </summary>
-        private static bool ValidateArgs(string[] args)
+        private static bool ValidateArgs(string[] args, ConsolePanelService consolePanelService)
         {
             if (args.Length == 0)
             {
-                _statusPanelManager.EnqueueUpdate(PanelLabels.Result, "Usage: ClearDir [start-directory]");
-                _statusPanelManager.Flush();
+                consolePanelService.Enqueue(PanelLabels.Result, "Usage: ClearDir [start-directory]");
+                consolePanelService.Flush();
                 return false;
             }
             return true;
         }
 
-        /// <summary>
-        /// Checks whether the specified directory exists, updating the panel if not.
-        /// </summary>
-        private static bool CheckDirectoryExists(string startDirectory)
+        private static bool CheckDirectoryExists(string startDirectory, ConsolePanelService consolePanelService)
         {
             if (!Directory.Exists(startDirectory))
             {
-                _statusPanelManager.EnqueueUpdate(PanelLabels.Result, $"The provided directory does not exist: {startDirectory}");
-                _statusPanelManager.Flush();
+                consolePanelService.Enqueue(PanelLabels.Result, $"The provided directory does not exist: {startDirectory}");
+                consolePanelService.Flush();
                 return false;
             }
             return true;
         }
 
-        /// <summary>
-        /// Starts a flush task asynchronously, using a periodic task runner for updates.
-        /// </summary>
-        private static Task StartFlushTaskAsync(StatusPanelManager statusPanelManager)
+        private static async Task PerformDirectorySearchAsync(
+            DirectorySearcher searcher,
+            string startDirectory,
+            ConsolePanelService consolePanelService,
+            CancellationToken cancellationToken)
         {
-            var flushCts = _cancellationTokenSources[CancellationTokenType.Flush];
-
-            Func<Task> flushTask = async () =>
-            {
-                statusPanelManager.Flush();
-                await Task.CompletedTask; // Simulate async work if needed
-            };
-
-            var periodicTaskRunner = new PeriodicTaskRunner(flushTask, 100, _logger);
-            return periodicTaskRunner.StartAsync(flushCts.Token);
-        }
-
-        /// <summary>
-        /// Performs the directory search asynchronously, updating the panel with progress.
-        /// </summary>
-        private static async Task PerformDirectorySearchAsync(DirectorySearcher searcher, string startDirectory, StatusPanelManager statusPanelManager)
-        {
-            var searchCts = _cancellationTokenSources[CancellationTokenType.Search];
-
+            // Use progress to update the ConsolePanelService directly
             var progress = new Progress<DirectorySearchStatus>(status =>
             {
-                statusPanelManager.EnqueueUpdate(PanelLabels.Scanning, status.CurrentDirectory);
-                statusPanelManager.EnqueueUpdate(PanelLabels.FoundCount, status.DirectoryCount.ToString());
-                statusPanelManager.EnqueueUpdate(PanelLabels.Result, "Searching");
+                consolePanelService.Enqueue(PanelLabels.Scanning, status.CurrentDirectory);
+                consolePanelService.Enqueue(PanelLabels.FoundCount, status.DirectoryCount.ToString());
+                consolePanelService.Enqueue(PanelLabels.Result, "Searching");
             });
 
-            var results = await searcher.SearchDirectoriesAsync(startDirectory, progress, searchCts.Token);
-            statusPanelManager.EnqueueUpdate(PanelLabels.Result, "Done");
-            statusPanelManager.Flush();
+            try
+            {
+                // Perform the search
+                var results = await searcher.SearchDirectoriesAsync(startDirectory, progress, cancellationToken);
+
+                // Report completion
+                consolePanelService.Enqueue(PanelLabels.Result, $"Done. Found {results.Count} directories.");
+                consolePanelService.Flush();
+            }
+            catch (OperationCanceledException)
+            {
+                // Handle cancellation gracefully
+                consolePanelService.Enqueue(PanelLabels.Result, "Search canceled.");
+                consolePanelService.Flush();
+            }
+            catch (Exception ex)
+            {
+                // Log critical errors
+                var logger = _serviceContainer.Resolve<ILogger>();
+                logger.LogError($"Critical error during search: {ex.Message}", ex);
+            }
         }
 
-        /// <summary>
-        /// Cleans up resources and cancels ongoing operations when the application exits.
-        /// </summary>
-        private static void OnProcessExit(object sender, EventArgs e)
-        {
-            foreach (var cts in _cancellationTokenSources.Values)
-            {
-                cts.Cancel(); // Ensure graceful cleanup
-            }
-            _statusPanelManager.Detach();
-        }
+
+        // private static async Task PerformDirectorySearchAsync(
+        //     DirectorySearcher searcher,
+        //     string startDirectory,
+        //     ConsolePanelService ConsolePanelService)
+        // {
+        //     var searchCts = _serviceContainer.Resolve<Dictionary<CancellationTokenType, CancellationTokenSource>>()
+        //                      [CancellationTokenType.Search];
+
+        //     var progress = new Progress<DirectorySearchStatus>(status =>
+        //     {
+        //         ConsolePanelService.Enqueue(PanelLabels.Scanning, status.CurrentDirectory);
+        //         ConsolePanelService.Enqueue(PanelLabels.FoundCount, status.DirectoryCount.ToString());
+        //         ConsolePanelService.Enqueue(PanelLabels.Result, "Searching");
+        //     });
+
+        //     var results = await searcher.SearchDirectoriesAsync(startDirectory, progress, searchCts.Token);
+        //     ConsolePanelService.Enqueue(PanelLabels.Result, "Done");
+        //     ConsolePanelService.Flush();
+        // }
     }
 }
