@@ -1,49 +1,43 @@
 namespace ClearDir
 {
     /// <summary>
-    /// Manages application flow, including halting execution on errors.
+    /// Manages the overall application flow.
     /// </summary>
     public class ApplicationManager
     {
-        private bool _isFinalized = false;
-        private readonly ILogger _logger;
+        private readonly ErrorHandler _errorHandler;
         private readonly Dictionary<CancellationTokenType, CancellationTokenSource> _cancellationTokenSources;
+        private readonly RenderLoop _renderLoop;
 
         /// <summary>
         /// Initializes a new instance of the <see cref="ApplicationManager"/> class.
         /// </summary>
-        /// <param name="logger">The logger to use for logging errors.</param>
-        public ApplicationManager(ILogger logger, 
-            Dictionary<CancellationTokenType, CancellationTokenSource> cancellationTokenSources)
+        /// <param name="errorHandler">The error handler to use.</param>
+        /// <param name="cancellationTokenSources">The cancellation token sources for managing task cancellation.</param>
+        /// <param name="renderLoop">The render loop responsible for rendering tasks.</param>
+        public ApplicationManager(ErrorHandler errorHandler,
+            Dictionary<CancellationTokenType, CancellationTokenSource> cancellationTokenSources,
+            RenderLoop renderLoop)
         {
-            _logger = logger ?? throw new ArgumentNullException(nameof(logger));
+            _errorHandler = errorHandler ?? throw new ArgumentNullException(nameof(errorHandler));
             _cancellationTokenSources = cancellationTokenSources ?? throw new ArgumentNullException(nameof(cancellationTokenSources));
+            _renderLoop = renderLoop ?? throw new ArgumentNullException(nameof(renderLoop));
         }
 
         /// <summary>
-        /// Logs an error and halts the application with a specified exit code.
+        /// Application logic main entry.
         /// </summary>
-        /// <param name="message">The error message to log.</param>
-        /// <param name="exception">Optional exception details to log.</param>
-        public void HaltApplication(string message, Exception? exception = null)
+        public async Task RunAsync()
         {
-            if (_isFinalized) return;
-
-            _isFinalized = true;
-
-            foreach (var cts in _cancellationTokenSources.Values)
+            try
             {
-                cts.Cancel(); // Ensure graceful cleanup
+                await _renderLoop.StartAsync(_cancellationTokenSources[CancellationTokenType.Flush].Token);
+                //var searcher = _serviceContainer.Resolve<DirectorySearcher>();
+                //await PerformDirectorySearchAsync(searcher, startDirectory, consolePanelService, cancellationTokenSources[CancellationTokenType.Search].Token);
             }
-
-            if (!string.IsNullOrEmpty(message))
+            catch (Exception ex)
             {
-                _logger.LogError(message, exception);
-                Environment.Exit(1); // Exit with error code 1
-            }
-            else
-            {
-                Environment.Exit(0);
+                _errorHandler.Halt("An unexpected error occurred.", ex);
             }
         }
     }
