@@ -34,6 +34,8 @@ namespace ClearDir
         /// </summary>
         public void Add(PanelLabels label, string text, int relativeX, int relativeY, int width, TextAlignment alignment = TextAlignment.Left)
         {
+            if (_isInitialized) throw new InvalidOperationException("Trying to modify already initialized view.");
+
             lock (_lock)
             {
                 var element = new PanelElement(label, text, relativeX, relativeY, width, alignment);
@@ -89,12 +91,20 @@ namespace ClearDir
         /// </summary>
         public void Initialize()
         {
+            if (_isInitialized) throw new InvalidOperationException("Trying to initialize already initialized view.");
+
             lock (_lock)
             {
                 if (Console.CursorLeft != 0)
                     Console.WriteLine();
-
-                _baseY = Console.CursorTop;
+                
+                // Reserve terminal space
+                var lines = BuildPlainLines();
+                foreach(var line in lines) 
+                {
+                    Console.WriteLine(line);
+                }
+                _baseY = Console.CursorTop - lines.Count;
                 _isInitialized = true;
             }
         }
