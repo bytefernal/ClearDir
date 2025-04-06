@@ -2,17 +2,6 @@ namespace ClearDir
 {
     public class DirectorySearcher
     {
-        private readonly ApplicationManager _appManager;
-
-        /// <summary>
-        /// Initializes a new instance of the <see cref="DirectorySearcher"/> class.
-        /// </summary>
-        /// <param name="appManager">The application manager for handling critical operations like halting the application.</param>
-        public DirectorySearcher(ApplicationManager appManager)
-        {
-            _appManager = appManager ?? throw new ArgumentNullException(nameof(appManager));
-        }
-
         /// <summary>
         /// Recursively searches for directories starting from the specified root directory.
         /// Reports progress and halts the application in case of critical errors.
@@ -70,7 +59,7 @@ namespace ClearDir
                     }
                     catch (Exception ex) when (!(ex is OperationCanceledException))
                     {
-                        _appManager.HaltApplication($"An error occurred while accessing '{currentDir}'.", ex);
+                        throw;
                     }
                 }
 
