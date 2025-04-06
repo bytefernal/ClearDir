@@ -10,19 +10,8 @@ namespace ClearDir
     /// </summary>
     public enum InstanceType
     {
-        /// <summary>
-        /// A single shared instance will be used for the lifetime of the application.
-        /// </summary>
         Singleton,
-
-        /// <summary>
-        /// A new instance will be created each time the service is resolved.
-        /// </summary>
         Transient,
-
-        /// <summary>
-        /// A single instance will be created per scope.
-        /// </summary>
         Scoped
     }
 
@@ -50,32 +39,44 @@ namespace ClearDir
         }
 
         /// <summary>
-        /// Registers a service type for automatic constructor injection.
+        /// Registers a service with automatic constructor injection.
         /// </summary>
         public void Register<TService>(InstanceType instanceType = InstanceType.Singleton) where TService : class
         {
             var serviceType = typeof(TService);
-            var constructor = serviceType.GetConstructors(BindingFlags.Public | BindingFlags.Instance)
-                                         .SingleOrDefault(); // Ensure there is only one constructor
-
-            if (constructor == null)
-            {
-                throw new InvalidOperationException($"Service of type {serviceType} must have exactly one public constructor.");
-            }
+            EnsureValidType(serviceType);
 
             _registrations[serviceType] = () =>
             {
+                var constructor = GetConstructor(serviceType);
                 var parameters = constructor.GetParameters()
                                             .Select(param => Resolve(param.ParameterType))
                                             .ToArray();
 
-                return Activator.CreateInstance(serviceType, parameters);
+                var instance = Activator.CreateInstance(serviceType, parameters);
+
+                if (instance == null)
+                {
+                    throw new InvalidOperationException($"Failed to create an instance of {serviceType.FullName}.");
+                }
+
+                return instance;
             };
 
             if (instanceType == InstanceType.Singleton)
             {
                 _singletons[serviceType] = _registrations[serviceType]();
             }
+        }
+
+        /// <summary>
+        /// Registers an interface with an implementation.
+        /// </summary>
+        public void Register<TService, TImplementation>(InstanceType instanceType = InstanceType.Singleton)
+            where TService : class
+            where TImplementation : class, TService
+        {
+            Register<TService>(() => (TService)Resolve<TImplementation>(), instanceType);
         }
 
         /// <summary>
@@ -113,7 +114,7 @@ namespace ClearDir
                 return instance;
             }
 
-            throw new InvalidOperationException($"Service of type {serviceType} is not registered.");
+            throw new InvalidOperationException($"Service of type {serviceType.FullName} is not registered.");
         }
 
         /// <summary>
@@ -141,6 +142,32 @@ namespace ClearDir
 
             _scopedInstances.Clear();
             _isInScope = false;
+        }
+
+        /// <summary>
+        /// Ensures the provided type is valid for automatic registration.
+        /// </summary>
+        private void EnsureValidType(Type serviceType)
+        {
+            if (serviceType.IsAbstract || serviceType.IsInterface)
+            {
+                throw new InvalidOperationException($"Cannot register abstract classes or interfaces: {serviceType.FullName}.");
+            }
+        }
+
+        /// <summary>
+        /// Gets the constructor for automatic injection, ensuring exactly one constructor exists.
+        /// </summary>
+        private ConstructorInfo GetConstructor(Type serviceType)
+        {
+            var constructors = serviceType.GetConstructors(BindingFlags.Public | BindingFlags.Instance);
+
+            if (constructors.Length != 1)
+            {
+                throw new InvalidOperationException($"Service type {serviceType.FullName} must have exactly one public constructor.");
+            }
+
+            return constructors[0];
         }
     }
 }
