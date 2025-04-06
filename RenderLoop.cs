@@ -26,7 +26,7 @@ namespace ClearDir
         /// <summary>
         /// Starts the periodic flush task asynchronously, managing cancellation and logging.
         /// </summary>
-        public Task StartAsync(CancellationToken cancellationToken)
+        public Task RunAsync(CancellationToken cancellationToken)
         {
             return Task.Run(async () =>
             {
