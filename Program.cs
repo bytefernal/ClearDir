@@ -6,24 +6,17 @@
 
         static async Task Main(string[] args)
         {
-            ConfigureServices();
+            if (!ValidateArgs(args) || !CheckDirectoryExists(args[0])) return;
 
-            var consolePanelService = _serviceContainer.Resolve<ConsolePanelService>();
-            var applicationManager = _serviceContainer.Resolve<ApplicationManager>();
-            var cancellationTokenSources = new Dictionary<CancellationTokenType, CancellationTokenSource>();
+            ConfigureServices(args[0]);
 
-            if (!ValidateArgs(args, consolePanelService)) return;
-
-            string startDirectory = args[0];
-            if (!CheckDirectoryExists(startDirectory, consolePanelService)) return;
-
-            await applicationManager.RunAsync();
+            await _serviceContainer.Resolve<ApplicationManager>().RunAsync();
         }
 
         /// <summary>
         /// Configures and registers services in the DI container.
         /// </summary>
-        private static void ConfigureServices()
+        private static void ConfigureServices(string startDirectory)
         {
             _serviceContainer.Register(() =>
             {
@@ -36,12 +29,6 @@
                 return new ConsolePanelService(consolePanel);
             });
 
-            _serviceContainer.Register<ILogger>(() => 
-            {
-                var consolePanelService = _serviceContainer.Resolve<ConsolePanelService>();
-                return new ConsolePanelLogger(consolePanelService);
-            });
-
             _serviceContainer.Register(() =>
             {
                 var cancellationTokenSources = new Dictionary<CancellationTokenType, CancellationTokenSource>();
@@ -52,13 +39,17 @@
                 return cancellationTokenSources;
             });
 
+            _serviceContainer.Register<ILogger, ConsolePanelLogger>();
+            _serviceContainer.Register<ErrorHandler>();
+            _serviceContainer.Register<DirectorySearcher>();
             _serviceContainer.Register(() =>
             {
-                var logger = _serviceContainer.Resolve<ILogger>();
+                var directorySearcher = _serviceContainer.Resolve<DirectorySearcher>();
+                var consolePanelService = _serviceContainer.Resolve<ConsolePanelService>();
                 var cancellationTokenSources = _serviceContainer.Resolve<Dictionary<CancellationTokenType, CancellationTokenSource>>();
-                return new ErrorHandler(logger, cancellationTokenSources);
+                return new DirectorySearchService(directorySearcher, consolePanelService, cancellationTokenSources, startDirectory);
             });
-
+            
             _serviceContainer.Register(() =>
             {
                 var consolePanelService = _serviceContainer.Resolve<ConsolePanelService>();
@@ -67,54 +58,26 @@
             });
 
             _serviceContainer.Register<ApplicationManager>();
-
-            _serviceContainer.Register(() =>
-            {
-                var appManager = _serviceContainer.Resolve<ApplicationManager>();
-                return new DirectorySearcher(appManager);
-            });
         }
 
-        private static bool ValidateArgs(string[] args, ConsolePanelService consolePanelService)
+        private static bool ValidateArgs(string[] args)
         {
             if (args.Length == 0)
             {
-                consolePanelService.Enqueue(PanelLabels.Result, "Usage: ClearDir [start-directory]");
-                consolePanelService.Flush();
+                Console.WriteLine("Usage: cleardir [start-directory]");
                 return false;
             }
             return true;
         }
 
-        private static bool CheckDirectoryExists(string startDirectory, ConsolePanelService consolePanelService)
+        private static bool CheckDirectoryExists(string startDirectory)
         {
             if (!Directory.Exists(startDirectory))
             {
-                consolePanelService.Enqueue(PanelLabels.Result, $"The provided directory does not exist: {startDirectory}");
-                consolePanelService.Flush();
+                Console.WriteLine($"The provided directory does not exist: {startDirectory}");
                 return false;
             }
             return true;
-        }
-
-        private static async Task PerformDirectorySearchAsync(
-            DirectorySearcher searcher,
-            string startDirectory,
-            ConsolePanelService ConsolePanelService)
-        {
-            var searchCts = _serviceContainer.Resolve<Dictionary<CancellationTokenType, CancellationTokenSource>>()
-                             [CancellationTokenType.Search];
-
-            var progress = new Progress<DirectorySearchStatus>(status =>
-            {
-                ConsolePanelService.Enqueue(PanelLabels.Scanning, status.CurrentDirectory);
-                ConsolePanelService.Enqueue(PanelLabels.FoundCount, status.DirectoryCount.ToString());
-                ConsolePanelService.Enqueue(PanelLabels.Result, "Searching");
-            });
-
-            var results = await searcher.SearchDirectoriesAsync(startDirectory, progress, searchCts.Token);
-            ConsolePanelService.Enqueue(PanelLabels.Result, "Done");
-            ConsolePanelService.Flush();
         }
     }
 }
